@@ -364,7 +364,7 @@ def render_dashboard_tab() -> None:
         row.update({"주말": stat.weekend_shifts, "공휴일": stat.holiday_shifts})
         rows.append(row)
     shift_df = pd.DataFrame(rows).set_index("이름").fillna(0).astype(int, errors="ignore")
-    st.dataframe(shift_df.style.background_gradient(cmap="YlOrRd", axis=None), use_container_width=True)
+    st.dataframe(_heatmap_style(shift_df), use_container_width=True)
 
     # 피로도 Heatmap
     st.subheader("🔥 피로도 Heatmap")
@@ -543,6 +543,31 @@ def render_code_reference_tab() -> None:
     }
     for k, v in cats.items():
         st.markdown(v)
+
+
+# ──────────────────────────────────────────────
+# 공통 유틸 — matplotlib 없이 동작하는 셀 색상 헬퍼
+# ──────────────────────────────────────────────
+
+def _heatmap_style(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    """
+    matplotlib 의존성 없이 숫자 크기에 따라 배경색을 칠하는 Styler 반환.
+    값이 클수록 진한 주황(YlOrRd 근사) 계열로 표현.
+    """
+    def _cell_bg(val):
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return ""
+        col_max = 15.0  # 월 최대 근무 횟수 상한 (정규화 기준)
+        ratio = min(v / col_max, 1.0)
+        # YlOrRd 근사: 흰색(0) → 연노랑 → 주황 → 진빨강(1)
+        r = int(255)
+        g = int(255 * (1 - ratio * 0.85))
+        b = int(255 * (1 - ratio))
+        return f"background-color: rgb({r},{g},{b})"
+
+    return df.style.map(_cell_bg)
 
 
 # ──────────────────────────────────────────────
