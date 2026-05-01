@@ -1,0 +1,65 @@
+{
+  "ward": {
+    "id": "W-301",
+    "name": "내과 3병동",
+    "ward_type": "일반",
+    "patient_count": 40,
+    "acuity_level": 3
+  },
+  "nurses": [
+    {
+      "id": "N001", "name": "김수진", "skill_level": "숙련",
+      "ward_qualifications": ["일반", "중환자실"],
+      "allowed_shifts": ["D", "E", "N"],
+      "preference": {"preferred_shifts": ["D"], "preferred_days_off": [5, 6], "avoid_shifts": [], "max_nights_per_month": null}
+    },
+    {
+      "id": "N002", "name": "이민정", "skill_level": "숙련",
+      "ward_qualifications": ["일반", "외과"],
+      "allowed_shifts": ["D", "E", "N"],
+      "preference": {"preferred_shifts": ["E"], "preferred_days_off": [0], "avoid_shifts": [], "max_nights_per_month": null}
+    },
+    {
+      "id": "N003", "name": "박지영", "skill_level": "숙련",
+      "ward_qualifications": ["일반"],
+      "allowed_shifts": ["D", "E", "N"],
+      "preference": {"preferred_shifts": [], "preferred_days_off": [6], "avoid_shifts": ["N"], "max_nights_per_month": null}
+    },
+    {
+      "id": "N004", "name": "최현숙", "skill_level": "숙련",
+      "ward_qualifications": ["일반", "감염"],
+      "allowed_shifts": ["D", "E", "N"],
+      "preference": {"preferred_shifts": ["N"], "preferred_days_off": [], "avoid_shifts": [], "max_nights_per_month": 10}
+    },
+    {
+      "id": "N005", "name": "정유나", "skill_level": "일반",
+      "ward_qualifications": ["일반"],
+      "allowed_shifts": ["D", "E", "N"],
+      "preference": {"preferred_shifts": [], "preferred_days_off": [5, 6], "avoid_shifts": [], "max_nights_per_month": null}
+    },
+    {
+      "id": "N010", "name": "임채은", "skill_level": "신규",
+      "ward_qualifications": ["일반"],
+      "allowed_shifts": ["D", "E"],
+      "preference": {"preferred_shifts": ["D"], "preferred_days_off": [], "avoid_shifts": [], "max_nights_per_month": null}
+    }
+  ],
+  "rules": {
+    "max_consecutive_work_days": 5,
+    "night_rest_required": true,
+    "max_consecutive_nights": 3,
+    "min_rest_hours_between_shifts": 11,
+    "shift_requirements": {
+      "D": {"min_nurses": 4, "min_senior_nurses": 1},
+      "E": {"min_nurses": 3, "min_senior_nurses": 1},
+      "N": {"min_nurses": 2, "min_senior_nurses": 1}
+    },
+    "fairness_weight_night": 1.5,
+    "fairness_weight_weekend": 1.0,
+    "fairness_weight_holiday": 2.0,
+    "preference_satisfaction_rate": 0.7
+  },
+  "year": 2025,
+  "month": 6,
+  "country_code": "KR"
+}
