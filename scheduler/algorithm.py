@@ -225,6 +225,22 @@ class GreedyScheduler:
 
         candidates = [n for n in self.config.nurses if n.id not in blocked]
 
+        # 병동 자격 필터 (ward_settings.require_ward_qualification)
+        ward_settings = getattr(self.config, "ward_settings", None)
+        if ward_settings is not None and ward_settings.require_ward_qualification:
+            ward_type = self.config.ward.ward_type
+            qualified = [n for n in candidates if ward_type in n.ward_qualifications]
+            if qualified:  # 자격자가 없을 경우 필터 무시 (graceful degradation)
+                candidates = qualified
+
+        # 최소 경력 필터
+        if ward_settings is not None and ward_settings.min_skill_level is not None:
+            skill_order = {SkillLevel.NEW: 0, SkillLevel.GENERAL: 1, SkillLevel.SENIOR: 2}
+            min_order = skill_order.get(ward_settings.min_skill_level, 0)
+            skill_filtered = [n for n in candidates if skill_order.get(n.skill_level, 0) >= min_order]
+            if skill_filtered:
+                candidates = skill_filtered
+
         def sort_key(nurse: Nurse) -> Tuple:
             hist = matrix[nurse.id]
             # 해당 shift 누적 (공정성)

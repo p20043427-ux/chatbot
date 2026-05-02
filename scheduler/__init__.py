@@ -20,6 +20,7 @@ from .models import (
     ScheduleEntry,
     Schedule,
     ScheduleConfig,
+    WardSpecialSettings,
 )
 from .constraints import ConstraintChecker
 from .algorithm import GreedyScheduler
@@ -34,6 +35,7 @@ __all__ = [
     "SkillLevel", "WardType",
     "Nurse", "NursePreference", "Ward",
     "ScheduleRules", "FixedSchedule", "ScheduleEntry", "Schedule", "ScheduleConfig",
+    "WardSpecialSettings",
     "ConstraintChecker", "GreedyScheduler", "LocalSearchOptimizer",
     "ScheduleEvaluator", "ScheduleExporter",
 ]

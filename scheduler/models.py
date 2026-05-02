@@ -444,6 +444,40 @@ class Schedule(BaseModel):
 
 
 # ──────────────────────────────────────────────
+# 병동별 특수 설정
+# ──────────────────────────────────────────────
+
+class WardSpecialSettings(BaseModel):
+    """병동별 특수성 설정."""
+
+    require_ward_qualification: bool = Field(
+        default=True,
+        description="병동 자격이 있는 간호사만 배정 (ward_qualifications 필터)",
+    )
+    min_skill_level: Optional[SkillLevel] = Field(
+        default=None,
+        description="최소 경력 수준 (None=제한 없음)",
+    )
+    senior_night_required: bool = Field(
+        default=True,
+        description="야간 근무에 숙련 간호사 1명 이상 필요",
+    )
+    allow_sprint_shifts: bool = Field(
+        default=True,
+        description="스프린트 근무(S9/S10/S11) 허용 여부",
+    )
+    weekend_min_nurses: int = Field(
+        default=2,
+        ge=0,
+        description="주말 최소 근무 인원",
+    )
+    nurse_patient_ratio: float = Field(
+        default=0.167,
+        description="간호사:환자 비율 (기본 1:6 = 0.167)",
+    )
+
+
+# ──────────────────────────────────────────────
 # 스케줄링 실행 설정 (입력 통합 DTO)
 # ──────────────────────────────────────────────
 
@@ -459,6 +493,7 @@ class ScheduleConfig(BaseModel):
     country_code: str = Field(default="KR")
     previous_schedule: Optional[Schedule] = Field(default=None)
     locked_entries: List[ScheduleEntry] = Field(default_factory=list)
+    ward_settings: WardSpecialSettings = Field(default_factory=WardSpecialSettings)
 
     @property
     def nurse_map(self) -> Dict[str, Nurse]:

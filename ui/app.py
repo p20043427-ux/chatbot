@@ -32,6 +32,7 @@ from scheduler import (
     ShiftType,
     SkillLevel,
     WardType,
+    WardSpecialSettings,
 )
 from scheduler.models import (
     ASSIGNABLE_SHIFTS,
@@ -40,6 +41,7 @@ from scheduler.models import (
     FixedScheduleType,
     ScheduleEntry,
     ShiftRequirement,
+    Ward,
     get_shift_label,
 )
 from tests.sample_data import create_sample_nurses, create_sample_ward
@@ -265,14 +267,17 @@ def metric_row(*cards: str) -> None:
 
 def _init_state() -> None:
     defaults = {
-        "nurses":          create_sample_nurses(),
-        "ward":            create_sample_ward(),
-        "schedule":        None,
-        "eval_result":     None,
-        "fixed_schedules": [],
-        "locked_entries":  [],
-        "year":            datetime.date.today().year,
-        "month":           datetime.date.today().month,
+        "nurses":           create_sample_nurses(),
+        "ward":             create_sample_ward(),
+        "schedule":         None,
+        "eval_result":      None,
+        "fixed_schedules":  [],
+        "locked_entries":   [],
+        "year":             datetime.date.today().year,
+        "month":            datetime.date.today().month,
+        "previous_schedule": None,
+        "ward_settings":    WardSpecialSettings(),
+        "editing_nurse_id": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -363,7 +368,51 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
                 use_container_width=True,
             )
 
-    section(2, "Excel / CSV 업로드", "기존 근무표 불러오기", variant="teal")
+    # ── 전월 근무표 연계 ──────────────────────────────────
+    section(2, "전월 근무표 연계", "전월 데이터를 연계하면 연속 근무 판단이 정확해집니다", variant="teal")
+    prev_col1, prev_col2 = st.columns([3, 1])
+    with prev_col1:
+        prev_file = st.file_uploader(
+            "전월 근무표 업로드 (Excel/CSV)",
+            type=["xlsx", "csv"],
+            key="prev_schedule_upload",
+            label_visibility="collapsed",
+        )
+        if prev_file:
+            try:
+                prev_exporter = ScheduleExporter(st.session_state.nurses)
+                prev_year  = st.session_state.year if st.session_state.month > 1 else st.session_state.year - 1
+                prev_month = st.session_state.month - 1 if st.session_state.month > 1 else 12
+                if prev_file.name.endswith(".xlsx"):
+                    prev_sched = prev_exporter.from_excel(
+                        prev_file.read(), st.session_state.ward.id, prev_year, prev_month)
+                else:
+                    prev_sched = prev_exporter.from_csv(
+                        prev_file.read().decode("utf-8-sig"), st.session_state.ward.id, prev_year, prev_month)
+                st.session_state.previous_schedule = prev_sched
+                st.success("전월 근무표를 불러왔습니다.")
+            except Exception as ex:
+                st.error(f"전월 근무표 파싱 오류: {ex}")
+    with prev_col2:
+        if st.session_state.schedule and st.button(
+            "현재 근무표 → 전월로 저장", key="btn_save_as_prev", use_container_width=True
+        ):
+            st.session_state.previous_schedule = st.session_state.schedule
+            st.success("현재 근무표를 전월 데이터로 저장했습니다.")
+            st.rerun()
+
+    if st.session_state.get("previous_schedule"):
+        ps = st.session_state.previous_schedule
+        st.markdown(
+            f'<span style="background:#1E8449;color:#fff;padding:4px 12px;border-radius:12px;'
+            f'font-size:12px;font-weight:600;">✓ 전월 연계 활성화 '
+            f'({ps.year}년 {ps.month}월 · {len(ps.entries)}셀)</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("전월 데이터 미연계 — 연속 근무 판단 시 이전 달 이력 없음")
+
+    section(3, "Excel / CSV 업로드", "기존 근무표 불러오기", variant="teal")
     uploaded = st.file_uploader("파일 선택", type=["xlsx", "csv"], label_visibility="collapsed")
     if uploaded:
         exporter = ScheduleExporter(st.session_state.nurses)
@@ -385,7 +434,8 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
     if st.session_state.schedule:
         _render_grid(st.session_state.schedule, rules)
     else:
-        st.info("‘자동 생성’ 버튼을 눌러 근무표를 생성하세요.")
+        st.info("’자동 생성’ 버튼을 눌러 근무표를 생성하세요.")
+
 
 
 def _run_generation(rules: ScheduleRules, optimize: bool) -> None:
@@ -398,6 +448,8 @@ def _run_generation(rules: ScheduleRules, optimize: bool) -> None:
             year=st.session_state.year,
             month=st.session_state.month,
             locked_entries=st.session_state.locked_entries,
+            previous_schedule=st.session_state.get("previous_schedule"),
+            ward_settings=st.session_state.get("ward_settings", WardSpecialSettings()),
         )
         sched = GreedyScheduler(config).generate()
         if optimize:
@@ -423,21 +475,82 @@ def _render_grid(schedule: Schedule, rules: ScheduleRules) -> None:
     exporter = ScheduleExporter(st.session_state.nurses)
     df = exporter.to_dataframe(schedule)
 
-    def color_shift(val: str):
-        raw = str(val).strip()
-        try:
-            shift = ShiftType(raw)
-            color = f"#{SHIFT_META[shift].color_hex}" if shift in SHIFT_META else "#ffffff"
-            bold  = "600" if shift in WORK_SHIFTS else "400"
-        except (ValueError, KeyError):
-            color, bold = "#ffffff", "400"
-        return f"background-color:{color};font-weight:{bold};text-align:center;font-size:12px;"
+    # ── 근무표 직접 수정 (st.data_editor) ──────────────────────
+    COMMON_SHIFT_CODES = ["D", "E", "N", "N7", "O", "Y", "I", "T", "M", "S9", "S10", "S11", "DE", "HD", "HE", "HN", "KV", "IV", "G"]
 
-    st.dataframe(
-        df.style.map(color_shift),
+    date_cols = [c for c in df.columns]
+    col_config: dict = {}
+    for col in date_cols:
+        col_config[col] = st.column_config.SelectboxColumn(
+            label=col,
+            options=COMMON_SHIFT_CODES,
+            required=False,
+        )
+
+    edited_df = st.data_editor(
+        df,
         use_container_width=True,
         height=min(55 + len(st.session_state.nurses) * 36, 650),
+        column_config=col_config,
+        key="schedule_grid_editor",
+        num_rows="fixed",
     )
+
+    # 변경사항 감지 및 저장
+    if not df.equals(edited_df):
+        if st.button("변경사항 저장", key="btn_save_edits", type="primary"):
+            nurse_name_map = {
+                f"{n.name}({n.skill_level.value})": n.id
+                for n in st.session_state.nurses
+            }
+            import calendar as _cal
+            _, last_day = _cal.monthrange(st.session_state.year, st.session_state.month)
+            new_locked: list = list(st.session_state.locked_entries)
+
+            for row_label in edited_df.index:
+                nurse_id = nurse_name_map.get(str(row_label))
+                if nurse_id is None:
+                    continue
+                orig_row = df.loc[row_label] if row_label in df.index else None
+                edit_row = edited_df.loc[row_label]
+                for col in date_cols:
+                    orig_val = str(orig_row[col]).strip() if orig_row is not None else ""
+                    new_val  = str(edit_row[col]).strip() if col in edit_row.index else ""
+                    if orig_val != new_val and new_val:
+                        try:
+                            new_shift = ShiftType(new_val)
+                        except ValueError:
+                            continue
+                        # parse date from column label e.g. "6/1\n월"
+                        try:
+                            date_part = col.split("\n")[0].strip()
+                            m, d = map(int, date_part.split("/"))
+                            entry_date = datetime.date(st.session_state.year, m, d)
+                        except (ValueError, IndexError):
+                            continue
+                        new_entry = ScheduleEntry(
+                            nurse_id=nurse_id,
+                            date=entry_date,
+                            shift=new_shift,
+                            is_fixed=True,
+                            is_weekend=entry_date.weekday() >= 5,
+                        )
+                        # remove existing locked entry for same cell
+                        new_locked = [
+                            e for e in new_locked
+                            if not (e.nurse_id == nurse_id and e.date == entry_date)
+                        ]
+                        new_locked.append(new_entry)
+                        # update schedule entries in place
+                        for i, e in enumerate(schedule.entries):
+                            if e.nurse_id == nurse_id and e.date == entry_date:
+                                schedule.entries[i] = new_entry
+                                break
+
+            st.session_state.locked_entries = new_locked
+            st.session_state.schedule = schedule
+            st.success("변경사항이 저장되었습니다.")
+            st.rerun()
 
     section(4, "수동 셀 수정", "고정한 셀은 재생성 시에도 유지됩니다", variant="amber")
     c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
@@ -596,16 +709,83 @@ def render_dashboard_tab() -> None:
 def render_nurses_tab() -> None:
     nurses = st.session_state.nurses
     section(1, "간호사 목록", f"총 {len(nurses)}명")
-    data = [{
-        "ID":         n.id,
-        "이름":       n.name,
-        "경력":       n.skill_level.value,
-        "가능 병동":  ", ".join(w.value for w in n.ward_qualifications),
-        "가능 Shift": ", ".join(s.value for s in n.allowed_shifts),
-    } for n in nurses]
-    st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
 
-    section(2, "간호사 추가", variant="green")
+    # ── 간호사 목록 (수정 / 삭제 버튼 포함) ──────────────────────
+    for idx, n in enumerate(nurses):
+        c_info, c_edit, c_del = st.columns([6, 1, 1])
+        with c_info:
+            st.markdown(
+                f"**{n.name}** ({n.skill_level.value}) &nbsp;|&nbsp; "
+                f"ID: `{n.id}` &nbsp;|&nbsp; "
+                f"병동: {', '.join(w.value for w in n.ward_qualifications)} &nbsp;|&nbsp; "
+                f"Shift: {', '.join(s.value for s in n.allowed_shifts)}",
+                unsafe_allow_html=True,
+            )
+        with c_edit:
+            if st.button("수정", key=f"btn_edit_nurse_{n.id}", use_container_width=True):
+                st.session_state["editing_nurse_id"] = n.id
+                st.rerun()
+        with c_del:
+            if st.button("삭제", key=f"btn_del_nurse_{n.id}", use_container_width=True):
+                st.session_state.nurses = [x for x in st.session_state.nurses if x.id != n.id]
+                if st.session_state.get("editing_nurse_id") == n.id:
+                    st.session_state["editing_nurse_id"] = None
+                st.session_state.schedule    = None
+                st.session_state.eval_result = None
+                st.rerun()
+
+    # ── 수정 폼 ──────────────────────────────────────────────────
+    editing_id = st.session_state.get("editing_nurse_id")
+    edit_nurse = next((n for n in nurses if n.id == editing_id), None) if editing_id else None
+
+    if edit_nurse:
+        section(2, f"간호사 수정 — {edit_nurse.name}", variant="amber")
+        ec1, ec2, ec3 = st.columns(3)
+        e_name  = ec1.text_input("이름",   value=edit_nurse.name,             key="en_name")
+        e_skill = ec2.selectbox("경력",    [s.value for s in SkillLevel],
+                                index=[s.value for s in SkillLevel].index(edit_nurse.skill_level.value),
+                                key="en_skill")
+        e_wards = st.multiselect(
+            "가능 병동",
+            [w.value for w in WardType],
+            default=[w.value for w in edit_nurse.ward_qualifications],
+            key="en_wards",
+        )
+        e_shifts = st.multiselect(
+            "가능 Shift",
+            [f"{s.value} — {get_shift_label(s)}" for s in sorted(ASSIGNABLE_SHIFTS, key=lambda x: x.value)],
+            default=[f"{s.value} — {get_shift_label(s)}" for s in edit_nurse.allowed_shifts
+                     if s in ASSIGNABLE_SHIFTS],
+            key="en_shifts",
+        )
+        ec_save, ec_cancel, _ = st.columns([1, 1, 4])
+        with ec_save:
+            if st.button("저장", key="btn_edit_save", type="primary", use_container_width=True):
+                try:
+                    updated = Nurse(
+                        id=edit_nurse.id,
+                        name=e_name,
+                        skill_level=SkillLevel(e_skill),
+                        ward_qualifications=[WardType(w) for w in e_wards],
+                        allowed_shifts=[ShiftType(s.split(" — ")[0]) for s in e_shifts],
+                        preference=edit_nurse.preference,
+                        is_part_time=edit_nurse.is_part_time,
+                    )
+                    st.session_state.nurses = [
+                        updated if x.id == edit_nurse.id else x
+                        for x in st.session_state.nurses
+                    ]
+                    st.session_state["editing_nurse_id"] = None
+                    st.success(f"{updated.name} 수정 완료")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"수정 오류: {ex}")
+        with ec_cancel:
+            if st.button("취소", key="btn_edit_cancel", use_container_width=True):
+                st.session_state["editing_nurse_id"] = None
+                st.rerun()
+
+    section(3 if edit_nurse else 2, "간호사 추가", variant="green")
     c1, c2, c3 = st.columns(3)
     new_id    = c1.text_input("ID",   key="nn_id")
     new_name  = c2.text_input("이름", key="nn_name")
@@ -753,6 +933,114 @@ def render_code_reference_tab() -> None:
 
 
 # ─────────────────────────────────────────────
+# 탭 6: 병동 설정
+# ─────────────────────────────────────────────
+
+def render_ward_settings_tab() -> None:
+    from scheduler.models import WardSpecialSettings as _WardSpecialSettings
+
+    section(1, "병동 기본 정보", "병동 이름, 유형, 환자 수 등")
+    ward = st.session_state.ward
+    wc1, wc2 = st.columns(2)
+    new_ward_name = wc1.text_input("병동 이름", value=ward.name, key="ws_ward_name")
+    new_ward_type = wc2.selectbox(
+        "병동 유형",
+        [w.value for w in WardType],
+        index=[w.value for w in WardType].index(ward.ward_type.value),
+        key="ws_ward_type",
+    )
+    wc3, wc4 = st.columns(2)
+    new_patient_count = wc3.number_input("환자 수", value=ward.patient_count, min_value=0, key="ws_patient_count")
+    new_acuity = wc4.slider("중증도 (1=경증, 5=최중증)", 1, 5, ward.acuity_level, key="ws_acuity")
+
+    if st.button("병동 정보 저장", key="btn_save_ward", type="primary"):
+        from scheduler.models import Ward as _Ward
+        st.session_state.ward = _Ward(
+            id=ward.id,
+            name=new_ward_name,
+            ward_type=WardType(new_ward_type),
+            patient_count=new_patient_count,
+            acuity_level=new_acuity,
+        )
+        st.success("병동 정보가 저장되었습니다.")
+        st.rerun()
+
+    section(2, "병동 특수 설정", "스케줄 생성 시 적용되는 병동별 규칙", variant="amber")
+
+    ws: WardSpecialSettings = st.session_state.get("ward_settings", WardSpecialSettings())
+
+    require_qual = st.checkbox(
+        "병동 자격 필터 활성화 (ward_qualifications 기반)",
+        value=ws.require_ward_qualification,
+        key="ws_require_qual",
+        help="체크 시 해당 병동 자격이 있는 간호사만 배정됩니다.",
+    )
+
+    skill_levels_none = ["제한 없음"] + [s.value for s in SkillLevel]
+    current_min_skill_idx = 0 if ws.min_skill_level is None else \
+        skill_levels_none.index(ws.min_skill_level.value)
+    min_skill_str = st.selectbox(
+        "최소 경력 수준",
+        skill_levels_none,
+        index=current_min_skill_idx,
+        key="ws_min_skill",
+    )
+    min_skill_val = None if min_skill_str == "제한 없음" else SkillLevel(min_skill_str)
+
+    senior_night = st.checkbox(
+        "야간 근무에 숙련 간호사 1명 이상 필요",
+        value=ws.senior_night_required,
+        key="ws_senior_night",
+    )
+    allow_sprint = st.checkbox(
+        "스프린트 근무(S9/S10/S11) 허용",
+        value=ws.allow_sprint_shifts,
+        key="ws_allow_sprint",
+    )
+
+    sc1, sc2 = st.columns(2)
+    weekend_min = sc1.number_input(
+        "주말 최소 근무 인원",
+        value=ws.weekend_min_nurses,
+        min_value=0,
+        key="ws_weekend_min",
+    )
+    nurse_patient_ratio = sc2.number_input(
+        "간호사:환자 비율 (예: 0.167 = 1:6)",
+        value=ws.nurse_patient_ratio,
+        min_value=0.01,
+        max_value=1.0,
+        step=0.001,
+        format="%.3f",
+        key="ws_ratio",
+    )
+
+    if st.button("병동 특수 설정 저장", key="btn_save_ward_settings", type="primary"):
+        st.session_state["ward_settings"] = WardSpecialSettings(
+            require_ward_qualification=require_qual,
+            min_skill_level=min_skill_val,
+            senior_night_required=senior_night,
+            allow_sprint_shifts=allow_sprint,
+            weekend_min_nurses=int(weekend_min),
+            nurse_patient_ratio=float(nurse_patient_ratio),
+        )
+        st.success("병동 특수 설정이 저장되었습니다.")
+
+    section(3, "현재 설정 요약", variant="teal")
+    saved_ws = st.session_state.get("ward_settings", WardSpecialSettings())
+    metric_row(
+        metric_html("병동 자격 필터", "활성" if saved_ws.require_ward_qualification else "비활성",
+                    variant="success" if saved_ws.require_ward_qualification else "warning"),
+        metric_html("최소 경력",
+                    saved_ws.min_skill_level.value if saved_ws.min_skill_level else "제한 없음"),
+        metric_html("야간 숙련 필요", "필요" if saved_ws.senior_night_required else "불필요"),
+        metric_html("스프린트 허용", "허용" if saved_ws.allow_sprint_shifts else "불허"),
+        metric_html("주말 최소 인원", str(saved_ws.weekend_min_nurses)),
+        metric_html("간호사:환자 비율", f"1:{1/saved_ws.nurse_patient_ratio:.1f}"),
+    )
+
+
+# ─────────────────────────────────────────────
 # 공통 유틸
 # ─────────────────────────────────────────────
 
@@ -783,12 +1071,13 @@ def main() -> None:
 
     rules = render_sidebar()
 
-    tabs = st.tabs(["근무표", "대시보드", "간호사", "고정 일정", "근무 코드표"])
+    tabs = st.tabs(["근무표", "대시보드", "간호사", "고정 일정", "근무 코드표", "병동 설정"])
     with tabs[0]: render_schedule_tab(rules)
     with tabs[1]: render_dashboard_tab()
     with tabs[2]: render_nurses_tab()
     with tabs[3]: render_fixed_tab()
     with tabs[4]: render_code_reference_tab()
+    with tabs[5]: render_ward_settings_tab()
 
 
 if __name__ == "__main__":
