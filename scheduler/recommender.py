@@ -127,10 +127,12 @@ class SmartRecommender:
         matrix = schedule.as_matrix(self.nurses)
         avg_night = _avg_night_count(matrix, self.nurses)
 
-        # 해당 날짜에 이미 shift가 배정된 간호사는 후보에서 제외
+        # 해당 날짜에 이미 근무(OFF 제외)가 배정된 간호사는 후보에서 제외
+        # (O/OFF 인 간호사는 추천 대상으로 포함)
         already_assigned = {
             e.nurse_id
             for e in schedule.get_date_entries(date)
+            if e.shift not in OFF_SHIFTS
         }
 
         candidates: List[NurseCandidate] = []
