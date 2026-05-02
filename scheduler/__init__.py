@@ -1,3 +1,4 @@
+# 수정: 2026-05-02
 """Nurse Scheduling System — 병동 간호사 근무표 자동 생성 시스템."""
 
 from .models import (
@@ -27,6 +28,9 @@ from .algorithm import GreedyScheduler
 from .optimizer import LocalSearchOptimizer
 from .evaluator import ScheduleEvaluator
 from .exporter import ScheduleExporter
+from .recommender import SmartRecommender, NurseCandidate
+from .explainer import AssignmentExplainer
+from .auto_fixer import AutoFixer, FixResult
 
 __all__ = [
     "ShiftType", "SHIFT_META", "ASSIGNABLE_SHIFTS", "WORK_SHIFTS",
@@ -38,4 +42,7 @@ __all__ = [
     "WardSpecialSettings",
     "ConstraintChecker", "GreedyScheduler", "LocalSearchOptimizer",
     "ScheduleEvaluator", "ScheduleExporter",
+    "SmartRecommender", "NurseCandidate",
+    "AssignmentExplainer",
+    "AutoFixer", "FixResult",
 ]

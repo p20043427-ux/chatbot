@@ -1,3 +1,4 @@
+# 수정: 2026-05-02
 """
 병동 간호사 근무표 자동 생성 시스템 — Streamlit UI.
 
@@ -20,6 +21,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from scheduler import (
+    AssignmentExplainer,
+    AutoFixer,
     FixedSchedule,
     GreedyScheduler,
     LocalSearchOptimizer,
@@ -31,6 +34,7 @@ from scheduler import (
     ScheduleRules,
     ShiftType,
     SkillLevel,
+    SmartRecommender,
     WardType,
     WardSpecialSettings,
 )
@@ -278,6 +282,9 @@ def _init_state() -> None:
         "previous_schedule": None,
         "ward_settings":    WardSpecialSettings(),
         "editing_nurse_id": None,
+        # 새로운 기능용 세션 상태
+        "recommendations":  None,    # 스마트 추천 결과
+        "sim_schedule":     None,    # 시뮬레이션 모드 임시 근무표
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -349,6 +356,30 @@ def render_sidebar() -> ScheduleRules:
 # ─────────────────────────────────────────────
 
 def render_schedule_tab(rules: ScheduleRules) -> None:
+    # ── 시뮬레이션 모드 토글 ─────────────────────────────────────────────────
+    sim_mode = st.toggle(
+        "시뮬레이션 모드",
+        key="sim_mode",
+        help="ON: 변경사항이 확정되지 않으며 미리 볼 수 있습니다",
+    )
+    if sim_mode:
+        st.warning("시뮬레이션 모드 — 변경사항은 '확정' 버튼을 눌러야 적용됩니다")
+        # 시뮬레이션 확정 / 취소 버튼
+        _sim_c1, _sim_c2, _ = st.columns([1, 1, 4])
+        with _sim_c1:
+            if st.button("확정", key="btn_sim_confirm", type="primary", use_container_width=True):
+                # sim_schedule → schedule 복사
+                if st.session_state.get("sim_schedule") is not None:
+                    st.session_state.schedule = st.session_state.sim_schedule
+                    st.session_state.sim_schedule = None
+                    st.success("시뮬레이션 결과가 근무표에 확정되었습니다.")
+                    st.rerun()
+        with _sim_c2:
+            if st.button("취소", key="btn_sim_cancel", use_container_width=True):
+                st.session_state.sim_schedule = None
+                st.info("시뮬레이션이 취소되었습니다.")
+                st.rerun()
+
     section(1, "근무표 생성", "버튼을 눌러 자동 배정 또는 최적화를 실행합니다")
     c_gen, c_opt, c_exp = st.columns(3)
     with c_gen:
@@ -431,11 +462,153 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
         except Exception as ex:
             st.error(f"파싱 오류: {ex}")
 
-    if st.session_state.schedule:
-        _render_grid(st.session_state.schedule, rules)
+    # 표시할 근무표 결정 (시뮬레이션 모드이면 sim_schedule 우선)
+    _active_schedule = st.session_state.get("sim_schedule") or st.session_state.schedule
+
+    if _active_schedule:
+        _render_grid(_active_schedule, rules)
+        _render_smart_recommend_panel(_active_schedule, rules)
+        _render_auto_fix_panel(_active_schedule, rules, sim_mode)
     else:
         st.info("’자동 생성’ 버튼을 눌러 근무표를 생성하세요.")
 
+
+
+def _render_smart_recommend_panel(schedule: Schedule, rules: ScheduleRules) -> None:
+    """스마트 추천 패널 — 특정 날짜·근무에 적합한 간호사 후보 순위 표시."""
+    section(7, "스마트 추천", "날짜와 근무를 선택하면 적합한 간호사를 추천합니다", variant="teal")
+
+    rc1, rc2, rc3, rc4 = st.columns([2, 1, 2, 1])
+    with rc1:
+        nurse_options_rec = {n.name: n for n in st.session_state.nurses}
+        _sel_nurse_name = st.selectbox(
+            "간호사 (참조용)", list(nurse_options_rec.keys()), key="rec_nurse"
+        )
+    with rc2:
+        _, last_day_r = calendar.monthrange(st.session_state.year, st.session_state.month)
+        rec_day = st.number_input("날짜", 1, last_day_r, 1, key="rec_day")
+    with rc3:
+        # 추천 가능한 Shift 목록 (규칙에 정의된 Shift 위주)
+        rec_shift_options = [s.value for s in [ShiftType.D, ShiftType.E, ShiftType.N, ShiftType.N7, ShiftType.M]]
+        rec_shift_val = st.selectbox(
+            "근무 코드",
+            rec_shift_options,
+            format_func=lambda v: f"{v} — {get_shift_label(ShiftType(v))}",
+            key="rec_shift",
+        )
+    with rc4:
+        rec_btn = st.button("추천 조회", key="btn_recommend", use_container_width=True)
+
+    if rec_btn:
+        # 스마트 추천 실행
+        rec_date = datetime.date(st.session_state.year, st.session_state.month, rec_day)
+        rec_shift = ShiftType(rec_shift_val)
+        recommender = SmartRecommender(rules, st.session_state.nurses)
+        candidates = recommender.recommend(schedule, rec_date, rec_shift, top_n=5)
+        st.session_state["recommendations"] = {
+            "candidates": candidates,
+            "date": rec_date,
+            "shift": rec_shift,
+        }
+
+    # 추천 결과 표시
+    rec_data = st.session_state.get("recommendations")
+    if rec_data:
+        rec_candidates = rec_data["candidates"]
+        rec_date_disp  = rec_data["date"]
+        rec_shift_disp = rec_data["shift"]
+
+        st.caption(
+            f"{rec_date_disp} {rec_shift_disp.value} 근무 추천 결과 "
+            f"({len(rec_candidates)}명)"
+        )
+
+        # 결과를 DataFrame 으로 구성
+        rows = []
+        for rank, c in enumerate(rec_candidates, 1):
+            feasible_html = "✓ 가능" if c.is_feasible else "✗ 불가"
+            rows.append({
+                "순위":    rank,
+                "간호사":  c.nurse.name,
+                "경력":    c.nurse.skill_level.value,
+                "점수":    f"{c.score:.1f}",
+                "장점":    " / ".join(c.reasons_pos) if c.reasons_pos else "—",
+                "단점":    " / ".join(c.reasons_neg) if c.reasons_neg else "—",
+                "가능여부": feasible_html,
+            })
+
+        if rows:
+            rec_df = pd.DataFrame(rows)
+            # 가능/불가 열에 색상 적용
+            def _style_feasible(row):
+                styles = [""] * len(row)
+                idx = rec_df.columns.get_loc("가능여부")
+                if "불가" in str(row.iloc[idx]):
+                    styles[idx] = "color: #B03A2E; font-weight: 600;"
+                else:
+                    styles[idx] = "color: #1E8449; font-weight: 600;"
+                return styles
+
+            st.dataframe(
+                rec_df.style.apply(_style_feasible, axis=1),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+def _render_auto_fix_panel(
+    schedule: Schedule,
+    rules: ScheduleRules,
+    sim_mode: bool,
+) -> None:
+    """자동 수정 패널 — 야간 균형·연속 근무 완화·주말 OFF 최적화."""
+    section(8, "자동 수정", "규칙 기반으로 근무표를 자동 개선합니다", variant="green")
+
+    auto_fixer = AutoFixer(rules, st.session_state.nurses)
+
+    af_c1, af_c2, af_c3 = st.columns(3)
+
+    def _apply_fix(result, label: str) -> None:
+        """수정 결과를 세션에 반영하고 UI 에 표시."""
+        if result.success:
+            # 시뮬레이션 모드면 sim_schedule, 아니면 schedule 에 저장
+            if sim_mode:
+                st.session_state["sim_schedule"] = result.schedule
+            else:
+                st.session_state.schedule = result.schedule
+                # 평가 결과 재계산
+                config = ScheduleConfig(
+                    ward=st.session_state.ward,
+                    nurses=st.session_state.nurses,
+                    rules=rules,
+                    fixed_schedules=st.session_state.fixed_schedules,
+                    year=st.session_state.year,
+                    month=st.session_state.month,
+                    ward_settings=st.session_state.get("ward_settings", WardSpecialSettings()),
+                )
+                st.session_state.eval_result = ScheduleEvaluator(config).evaluate(result.schedule)
+            st.success(f"**{label}** — {result.message}")
+            # 변경 내역 상세 표시
+            for ch in result.changes:
+                st.markdown(f"- {ch}")
+            st.rerun()
+        else:
+            st.info(f"**{label}** — {result.message}")
+
+    with af_c1:
+        if st.button("야간 균형 조정", key="btn_fix_night", use_container_width=True):
+            result = auto_fixer.balance_night_shifts(schedule)
+            _apply_fix(result, "야간 균형 조정")
+
+    with af_c2:
+        if st.button("연속 근무 완화", key="btn_fix_consec", use_container_width=True):
+            result = auto_fixer.reduce_consecutive_days(schedule)
+            _apply_fix(result, "연속 근무 완화")
+
+    with af_c3:
+        if st.button("주말 OFF 최적화", key="btn_fix_weekend", use_container_width=True):
+            result = auto_fixer.optimize_off_distribution(schedule)
+            _apply_fix(result, "주말 OFF 최적화")
 
 
 def _run_generation(rules: ScheduleRules, optimize: bool) -> None:
@@ -591,6 +764,26 @@ def _render_grid(schedule: Schedule, rules: ScheduleRules) -> None:
         st.success(f"{sel_name} {sel_date}: {sel_shift_val} 고정")
         st.rerun()
 
+    # ── 배정 설명 보기 ────────────────────────────────────────────────────────
+    # 현재 선택된 간호사·날짜의 실제 배정에 대한 이유를 한국어로 설명
+    with st.expander("배정 설명 보기"):
+        current_entry = schedule.get_entry(sel_nid, sel_date)
+        if current_entry and current_entry.shift not in (ShiftType.O, ShiftType.OFF):
+            explainer = AssignmentExplainer()
+            explanations = explainer.explain(
+                nurse=next((n for n in st.session_state.nurses if n.id == sel_nid), None)
+                      or st.session_state.nurses[0],
+                date=sel_date,
+                shift=current_entry.shift,
+                schedule=schedule,
+                all_nurses=st.session_state.nurses,
+            )
+            st.markdown(f"**{sel_name} — {sel_date} {current_entry.shift.value} 배정 이유:**")
+            for reason in explanations:
+                st.markdown(f"- {reason}")
+        else:
+            st.info("해당 날짜에 근무 배정이 없거나 비번(O)입니다.")
+
     if st.session_state.eval_result:
         er = st.session_state.eval_result
         hard_viols = [v for v in er.constraint_result.violations if v.is_hard]
@@ -622,16 +815,90 @@ def render_dashboard_tab() -> None:
     er  = st.session_state.eval_result
     sch = st.session_state.schedule
 
-    section(1, "종합 평가 지표")
+    # ── 이슈 패널 (Hard 위반 + 인력 부족) ─────────────────────────────────
+    section(1, "이슈 패널", "Hard Constraint 위반 및 인력 부족 경고", variant="red")
+    hard_viols_dash = [v for v in er.constraint_result.violations if v.is_hard]
+    shortage_log = sch.generation_params.get("shortage_log", [])
+    has_issues = bool(hard_viols_dash or shortage_log)
+
+    if not has_issues:
+        st.success("이슈 없음 — 모든 Hard Constraint 만족, 인력 부족 없음")
+    else:
+        # Hard 위반 표시
+        if hard_viols_dash:
+            st.markdown(f"**Hard Constraint 위반 ({len(hard_viols_dash)}건)**")
+            for v in hard_viols_dash:
+                badge_color = "#B03A2E"
+                st.markdown(
+                    f'<div style="margin:4px 0;padding:6px 12px;background:#FEF2F2;'
+                    f'border-left:4px solid {badge_color};border-radius:4px;font-size:13px;">'
+                    f'<span style="background:{badge_color};color:#fff;padding:2px 7px;'
+                    f'border-radius:3px;font-size:11px;font-weight:700;margin-right:8px;">'
+                    f'{v.constraint}</span>'
+                    f'{v.reason} '
+                    f'<span style="color:#718096;font-size:11px;">({v.date})</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # 인력 부족 경고 표시
+        if shortage_log:
+            st.markdown(f"**인력 부족 경고 ({len(shortage_log)}건)**")
+            for msg in shortage_log:
+                st.warning(msg)
+
+    # ── 종합 평가 KPI (개선: 델타 지시자 + 권장 인원 충족률) ───────────────
+    section(2, "종합 평가 지표")
     hard_cnt = sum(1 for v in er.constraint_result.violations if v.is_hard)
+
+    # 권장 인원 충족률 계산
+    ward_settings = st.session_state.get("ward_settings", WardSpecialSettings())
+    ward = st.session_state.ward
+    recommended_nurses = ward.patient_count * ward_settings.nurse_patient_ratio
+    actual_nurses = len(st.session_state.nurses)
+    ratio_fulfillment = min(actual_nurses / recommended_nurses, 1.0) if recommended_nurses > 0 else 1.0
+    ratio_pct = ratio_fulfillment * 100
+
+    # 야간 편차 평가 (낮을수록 좋음)
+    night_fair_variant = "success" if er.night_fairness_score < 1.0 else ("warning" if er.night_fairness_score < 2.0 else "danger")
+
     metric_row(
-        metric_html("종합 점수", f"{er.overall_score:.1f}", sub="/ 100"),
-        metric_html("Hard 위반", str(hard_cnt),
-                    variant="danger" if hard_cnt else "success"),
-        metric_html("인력 충족률", f"{er.staffing_coverage_rate*100:.0f}%",
-                    variant="success" if er.staffing_coverage_rate >= 0.9 else "warning"),
-        metric_html("선호 반영률", f"{er.preference_satisfaction_rate*100:.0f}%"),
-        metric_html("평균 피로도", f"{er.average_fatigue_score:.2f}", variant="teal"),
+        metric_html(
+            "종합 점수",
+            f"{er.overall_score:.1f}",
+            sub="/ 100",
+            variant="success" if er.overall_score >= 80 else ("warning" if er.overall_score >= 60 else "danger"),
+        ),
+        metric_html(
+            "Hard 위반",
+            str(hard_cnt),
+            sub="건 (0이 최적)",
+            variant="danger" if hard_cnt else "success",
+        ),
+        metric_html(
+            "인력 충족률",
+            f"{er.staffing_coverage_rate*100:.0f}%",
+            sub="배정 기준",
+            variant="success" if er.staffing_coverage_rate >= 0.9 else "warning",
+        ),
+        metric_html(
+            "권장 인원 충족률",
+            f"{ratio_pct:.0f}%",
+            sub=f"권장 {recommended_nurses:.1f}명 / 현재 {actual_nurses}명",
+            variant="success" if ratio_pct >= 90 else ("warning" if ratio_pct >= 70 else "danger"),
+        ),
+        metric_html(
+            "선호 반영률",
+            f"{er.preference_satisfaction_rate*100:.0f}%",
+            sub="목표 70%+",
+            variant="success" if er.preference_satisfaction_rate >= 0.7 else "warning",
+        ),
+        metric_html(
+            "평균 피로도",
+            f"{er.average_fatigue_score:.2f}",
+            sub="낮을수록 좋음",
+            variant="teal",
+        ),
     )
 
     evaluator = ScheduleEvaluator(ScheduleConfig(
@@ -646,7 +913,7 @@ def render_dashboard_tab() -> None:
         font=dict(size=11),
     )
 
-    section(2, "근무 분포 분석", variant="teal")
+    section(3, "근무 분포 분석", variant="teal")
     col1, col2 = st.columns(2)
     with col1:
         st.caption("야간 근무 분포")
@@ -665,7 +932,7 @@ def render_dashboard_tab() -> None:
         fig.update_layout(**_LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
 
-    section(3, "개인별 Shift 분포", variant="green")
+    section(4, "개인별 Shift 분포", variant="green")
     rows = []
     for stat in er.nurse_stats:
         row = {"이름": stat.nurse_name, "근무일": stat.total_work_days}
@@ -675,7 +942,7 @@ def render_dashboard_tab() -> None:
     shift_df = pd.DataFrame(rows).set_index("이름").fillna(0).astype(int, errors="ignore")
     st.dataframe(_heatmap_style(shift_df), use_container_width=True)
 
-    section(4, "피로도 Heatmap", "값이 클수록 누적 피로", variant="red")
+    section(5, "피로도 Heatmap", "값이 클수록 누적 피로", variant="red")
     fmat = evaluator.get_fatigue_matrix(sch)
     _, last_day = calendar.monthrange(st.session_state.year, st.session_state.month)
     dates = [datetime.date(st.session_state.year, st.session_state.month, d)
@@ -694,7 +961,7 @@ def render_dashboard_tab() -> None:
     )
     st.plotly_chart(fig_h, use_container_width=True)
 
-    section(5, "공정성 분석", "값이 낮을수록 균등", variant="amber")
+    section(6, "공정성 분석", "값이 낮을수록 균등", variant="amber")
     metric_row(
         metric_html("야간 편차 (std)",   f"{er.night_fairness_score:.2f}"),
         metric_html("주말 편차 (std)",   f"{er.weekend_fairness_score:.2f}"),
