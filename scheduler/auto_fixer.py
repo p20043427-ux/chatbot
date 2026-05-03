@@ -138,21 +138,19 @@ class AutoFixer:
                     if over_entry.shift not in under_nurse.allowed_shifts:
                         continue
 
-                    # 스왑 실행
-                    # over → O (비번)로 변경
+                    # 원래 야간 Shift 코드를 보존한 뒤 over → O(비번) 로 변경
+                    original_shift = over_entry.shift
                     over_entry.shift = ShiftType.O
 
                     if under_entry_today is not None:
-                        # 기존 O 셀을 야간으로 변경
-                        under_entry_today.shift = over_entry.shift if over_entry.shift != ShiftType.O else over_entry.shift
-                        # 실제로는 over_entry 의 원래 shift 로 바꿔야 함 → 이미 O 로 바꿨으므로 별도 처리
-                        under_entry_today.shift = ShiftType.N  # 야간 근무 기본값
+                        # 기존 O 셀을 원래 야간 코드로 변경
+                        under_entry_today.shift = original_shift
                     else:
-                        # under 간호사에게 새 야간 셀 추가
+                        # under 간호사에게 야간 셀 신규 추가
                         new_schedule.entries.append(ScheduleEntry(
                             nurse_id=under_id,
                             date=target_date,
-                            shift=ShiftType.N,
+                            shift=original_shift,
                             is_fixed=False,
                             is_weekend=target_date.weekday() >= 5,
                         ))

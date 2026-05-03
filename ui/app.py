@@ -381,26 +381,52 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
                 st.rerun()
 
     section(1, "근무표 생성", "버튼을 눌러 자동 배정 또는 최적화를 실행합니다")
-    c_gen, c_opt, c_exp = st.columns(3)
+    c_gen, c_opt = st.columns(2)
     with c_gen:
         if st.button("자동 생성", type="primary", use_container_width=True):
             _run_generation(rules, optimize=False)
     with c_opt:
         if st.button("생성 + 최적화", use_container_width=True):
             _run_generation(rules, optimize=True)
-    with c_exp:
-        if st.session_state.schedule:
-            exporter = ScheduleExporter(st.session_state.nurses)
-            xl = exporter.to_excel(st.session_state.schedule)
+
+    # ── 다운로드 섹션 ──────────────────────────────────────────────────────────
+    if st.session_state.schedule:
+        section(2, "다운로드", "Excel · CSV · PNG 이미지 형식으로 내보내기", variant="teal")
+        _exp = ScheduleExporter(st.session_state.nurses)
+        _sched = st.session_state.schedule
+        _fname = f"schedule_{st.session_state.year}_{st.session_state.month:02d}"
+
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            _xl = _exp.to_excel(_sched)
             st.download_button(
-                "Excel 다운로드", data=xl,
-                file_name=f"schedule_{st.session_state.year}_{st.session_state.month:02d}.xlsx",
+                "📥 Excel 다운로드", data=_xl,
+                file_name=f"{_fname}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+        with dc2:
+            _csv = _exp.to_csv(_sched).encode("utf-8-sig")
+            st.download_button(
+                "📄 CSV 다운로드", data=_csv,
+                file_name=f"{_fname}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with dc3:
+            try:
+                _png = _exp.to_image(_sched)
+                st.download_button(
+                    "🖼️ 이미지(PNG) 다운로드", data=_png,
+                    file_name=f"{_fname}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                )
+            except Exception as _img_err:
+                st.caption(f"이미지 생성 불가: {_img_err}")
 
     # ── 전월 근무표 연계 ──────────────────────────────────
-    section(2, "전월 근무표 연계", "전월 데이터를 연계하면 연속 근무 판단이 정확해집니다", variant="teal")
+    section(3, "전월 근무표 연계", "전월 데이터를 연계하면 연속 근무 판단이 정확해집니다", variant="teal")
     prev_col1, prev_col2 = st.columns([3, 1])
     with prev_col1:
         prev_file = st.file_uploader(
@@ -443,7 +469,7 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
     else:
         st.caption("전월 데이터 미연계 — 연속 근무 판단 시 이전 달 이력 없음")
 
-    section(3, "Excel / CSV 업로드", "기존 근무표 불러오기", variant="teal")
+    section(4, "Excel / CSV 업로드", "기존 근무표 불러오기", variant="teal")
     uploaded = st.file_uploader("파일 선택", type=["xlsx", "csv"], label_visibility="collapsed")
     if uploaded:
         exporter = ScheduleExporter(st.session_state.nurses)
@@ -476,7 +502,7 @@ def render_schedule_tab(rules: ScheduleRules) -> None:
 
 def _render_smart_recommend_panel(schedule: Schedule, rules: ScheduleRules) -> None:
     """스마트 추천 패널 — 특정 날짜·근무에 적합한 간호사 후보 순위 표시."""
-    section(7, "스마트 추천", "날짜와 근무를 선택하면 적합한 간호사를 추천합니다", variant="teal")
+    section(9, "스마트 추천", "날짜와 근무를 선택하면 적합한 간호사를 추천합니다", variant="teal")
 
     rc1, rc2, rc3, rc4 = st.columns([2, 1, 2, 1])
     with rc1:
@@ -562,7 +588,7 @@ def _render_auto_fix_panel(
     sim_mode: bool,
 ) -> None:
     """자동 수정 패널 — 야간 균형·연속 근무 완화·주말 OFF 최적화."""
-    section(8, "자동 수정", "규칙 기반으로 근무표를 자동 개선합니다", variant="green")
+    section(10, "자동 수정", "규칙 기반으로 근무표를 자동 개선합니다", variant="green")
 
     auto_fixer = AutoFixer(rules, st.session_state.nurses)
 
@@ -641,7 +667,7 @@ def _run_generation(rules: ScheduleRules, optimize: bool) -> None:
 
 
 def _render_grid(schedule: Schedule, rules: ScheduleRules) -> None:
-    section(3, "근무표 Grid",
+    section(5, "근무표 Grid",
             f"{st.session_state.year}년 {st.session_state.month}월 · "
             f"{len(st.session_state.nurses)}명")
 
@@ -725,7 +751,7 @@ def _render_grid(schedule: Schedule, rules: ScheduleRules) -> None:
             st.success("변경사항이 저장되었습니다.")
             st.rerun()
 
-    section(4, "수동 셀 수정", "고정한 셀은 재생성 시에도 유지됩니다", variant="amber")
+    section(6, "수동 셀 수정", "고정한 셀은 재생성 시에도 유지됩니다", variant="amber")
     c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
     nurse_options = {n.name: n.id for n in st.session_state.nurses}
     sel_name = c1.selectbox("간호사", list(nurse_options.keys()), key="mc_nurse")
@@ -788,17 +814,17 @@ def _render_grid(schedule: Schedule, rules: ScheduleRules) -> None:
         er = st.session_state.eval_result
         hard_viols = [v for v in er.constraint_result.violations if v.is_hard]
         if hard_viols:
-            section(5, "Hard Constraint 위반", f"총 {len(hard_viols)}건", variant="red")
+            section(7, "Hard Constraint 위반", f"총 {len(hard_viols)}건", variant="red")
             for v in hard_viols:
                 st.markdown(
                     f'<span class="viol">[{v.constraint}] {v.reason}</span>',
                     unsafe_allow_html=True,
                 )
         else:
-            section(5, "Hard Constraint 검증", "위반 없음", variant="green")
+            section(7, "Hard Constraint 검증", "위반 없음", variant="green")
             st.success("모든 Hard Constraint를 만족합니다")
 
-    section(6, "개인별 근무 요약")
+    section(8, "개인별 근무 요약")
     st.dataframe(exporter.to_summary_dataframe(schedule),
                  use_container_width=True, hide_index=True)
 
@@ -970,7 +996,131 @@ def render_dashboard_tab() -> None:
 
 
 # ─────────────────────────────────────────────
-# 탭 3: 간호사 관리
+# 탭 3: 전월 비교
+# ─────────────────────────────────────────────
+
+def render_comparison_tab() -> None:
+    """
+    이번 달 근무표와 전월 근무표를 비교한다.
+
+    섹션 구성:
+      1. 월별 통계 비교 — 간호사별 근무일·야간·주말·연차 변화량
+      2. 전월 근무 Grid — 전월 근무표 원본
+      3. 변경 현황 요약 — 근무 증감 상위 간호사 하이라이트
+    """
+    curr = st.session_state.schedule
+    prev = st.session_state.get("previous_schedule")
+
+    if curr is None:
+        st.info("먼저 '근무표' 탭에서 이번 달 근무표를 생성하세요.")
+        return
+    if prev is None:
+        st.info("'근무표' 탭 → 전월 근무표 연계 섹션에서 전월 데이터를 업로드하거나 저장하세요.")
+        return
+
+    from scheduler.models import NIGHT_SHIFTS, OFF_SHIFTS  # local import to avoid circular
+
+    exporter = ScheduleExporter(st.session_state.nurses)
+
+    def _stats(schedule: Schedule) -> dict:
+        """간호사별 {근무일, 야간, 주말, 연차} 딕셔너리 반환."""
+        matrix = schedule.as_matrix(st.session_state.nurses)
+        result = {}
+        for nurse in st.session_state.nurses:
+            hist = matrix.get(nurse.id, {})
+            result[nurse.id] = {
+                "근무일":  sum(1 for s in hist.values() if s in WORK_SHIFTS),
+                "야간":   sum(1 for s in hist.values() if s in NIGHT_SHIFTS),
+                "주말":   sum(1 for d, s in hist.items() if d.weekday() >= 5 and s in WORK_SHIFTS),
+                "연차(Y)": sum(1 for s in hist.values() if s.value == "Y"),
+            }
+        return result
+
+    curr_stats = _stats(curr)
+    prev_stats = _stats(prev)
+
+    # ── 섹션 1: 월별 통계 비교표 ───────────────────────────────────────────
+    section(1, "월별 통계 비교",
+            f"{prev.year}년 {prev.month}월  →  {curr.year}년 {curr.month}월",
+            variant="teal")
+
+    COLS = ["근무일", "야간", "주말", "연차(Y)"]
+    rows = []
+    for nurse in st.session_state.nurses:
+        nid = nurse.id
+        c = curr_stats.get(nid, {})
+        p = prev_stats.get(nid, {})
+        row: dict = {"이름": nurse.name, "경력": nurse.skill_level.value}
+        for col in COLS:
+            cv, pv = c.get(col, 0), p.get(col, 0)
+            delta = cv - pv
+            sign = "▲" if delta > 0 else ("▼" if delta < 0 else "─")
+            row[f"전월 {col}"] = pv
+            row[f"이번달 {col}"] = cv
+            row[f"Δ {col}"] = f"{sign}{abs(delta)}" if delta != 0 else "─"
+        rows.append(row)
+
+    cmp_df = pd.DataFrame(rows).set_index("이름")
+
+    def _style_delta(val: str) -> str:
+        if isinstance(val, str) and val.startswith("▲"):
+            return "color: #1E8449; font-weight: 600;"
+        if isinstance(val, str) and val.startswith("▼"):
+            return "color: #B03A2E; font-weight: 600;"
+        return ""
+
+    delta_cols = [c for c in cmp_df.columns if c.startswith("Δ")]
+    styled = cmp_df.style.applymap(_style_delta, subset=delta_cols)
+    st.dataframe(styled, use_container_width=True)
+
+    # ── 섹션 2: 전월 근무 Grid ─────────────────────────────────────────────
+    section(2, "전월 근무 Grid",
+            f"{prev.year}년 {prev.month}월 근무표", variant="amber")
+    prev_df = exporter.to_dataframe(prev)
+    st.dataframe(prev_df, use_container_width=True,
+                 height=min(55 + len(st.session_state.nurses) * 36, 500))
+
+    # ── 섹션 3: 이번달 근무 Grid ───────────────────────────────────────────
+    section(3, "이번달 근무 Grid",
+            f"{curr.year}년 {curr.month}월 근무표", variant="green")
+    curr_df = exporter.to_dataframe(curr)
+
+    # 두 달 공통 간호사 기준으로 셀 비교 → 변경 셀 수 계산
+    changed_cells: list[str] = []
+    for nurse in st.session_state.nurses:
+        nid = nurse.id
+        p_hist = prev.as_matrix(st.session_state.nurses).get(nid, {})
+        c_hist = curr.as_matrix(st.session_state.nurses).get(nid, {})
+        # 이번달 날짜 기준으로만 비교 (날짜 자체는 다르므로 일(day) 기준 매칭)
+        for d, cs in c_hist.items():
+            # 같은 일자(day)를 전월에서 찾기
+            prev_d = d.replace(month=prev.month, year=prev.year)
+            ps = p_hist.get(prev_d)
+            if ps is not None and ps != cs:
+                changed_cells.append(
+                    f"{nurse.name} {d.month}/{d.day}: {ps.value} → {cs.value}"
+                )
+
+    st.dataframe(curr_df, use_container_width=True,
+                 height=min(55 + len(st.session_state.nurses) * 36, 500))
+
+    # ── 섹션 4: 변경 현황 요약 ─────────────────────────────────────────────
+    section(4, "동일 일자 Shift 변경 현황",
+            f"같은 날짜(일)에서 코드가 달라진 셀: {len(changed_cells)}건",
+            variant="red" if changed_cells else "green")
+
+    if not changed_cells:
+        st.success("전월과 동일 날짜 기준으로 변경된 Shift가 없습니다.")
+    else:
+        # 상위 30건만 표시
+        for item in changed_cells[:30]:
+            st.markdown(f"- {item}")
+        if len(changed_cells) > 30:
+            st.caption(f"... 외 {len(changed_cells) - 30}건")
+
+
+# ─────────────────────────────────────────────
+# 탭 4: 간호사 관리
 # ─────────────────────────────────────────────
 
 def render_nurses_tab() -> None:
@@ -1338,13 +1488,14 @@ def main() -> None:
 
     rules = render_sidebar()
 
-    tabs = st.tabs(["근무표", "대시보드", "간호사", "고정 일정", "근무 코드표", "병동 설정"])
+    tabs = st.tabs(["근무표", "대시보드", "전월 비교", "간호사", "고정 일정", "근무 코드표", "병동 설정"])
     with tabs[0]: render_schedule_tab(rules)
     with tabs[1]: render_dashboard_tab()
-    with tabs[2]: render_nurses_tab()
-    with tabs[3]: render_fixed_tab()
-    with tabs[4]: render_code_reference_tab()
-    with tabs[5]: render_ward_settings_tab()
+    with tabs[2]: render_comparison_tab()
+    with tabs[3]: render_nurses_tab()
+    with tabs[4]: render_fixed_tab()
+    with tabs[5]: render_code_reference_tab()
+    with tabs[6]: render_ward_settings_tab()
 
 
 if __name__ == "__main__":

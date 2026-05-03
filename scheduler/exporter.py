@@ -183,6 +183,88 @@ class ScheduleExporter:
 
     # ── JSON ──────────────────────────────────
 
+    def to_image(self, schedule: Schedule) -> bytes:
+        """
+        Schedule → 색상 표현 PNG 이미지 (matplotlib).
+        각 셀을 SHIFT_META 색상으로 채운 표를 렌더링한다.
+        """
+        import io as _io
+
+        import matplotlib
+        matplotlib.use("Agg")  # 헤드리스 환경에서 GUI 백엔드 불필요
+        import matplotlib.pyplot as plt
+
+        df = self.to_dataframe(schedule)
+        n_nurses = len(df)
+        n_days = len(df.columns)
+
+        fig_w = max(14, n_days * 0.48 + 3.0)
+        fig_h = max(4, n_nurses * 0.42 + 1.8)
+
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.set_axis_off()
+        fig.patch.set_facecolor("#F1F4FA")
+
+        col_labels = list(df.columns)
+        row_labels = [str(r) for r in df.index]
+        cell_text = [
+            [str(v) for v in row]
+            for row in df.values.tolist()
+        ]
+
+        # 셀 배경색: ShiftType → (r, g, b, alpha)
+        def _hex_to_rgba(hex6: str, alpha: float = 0.80):
+            h = hex6.lstrip("#")
+            return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255, alpha)
+
+        cell_colors = []
+        for row_data in cell_text:
+            row_colors = []
+            for val in row_data:
+                try:
+                    shift = ShiftType(val)
+                    hex_col = "#" + _cell_color(shift)
+                except ValueError:
+                    hex_col = "#FFFFFF"
+                row_colors.append(_hex_to_rgba(hex_col))
+            cell_colors.append(row_colors)
+
+        tbl = ax.table(
+            cellText=cell_text,
+            rowLabels=row_labels,
+            colLabels=col_labels,
+            cellColours=cell_colors,
+            loc="center",
+            cellLoc="center",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(7.5)
+        tbl.scale(1.0, 1.35)
+
+        # 헤더 행 스타일 (navy)
+        for j in range(n_days):
+            cell = tbl[(0, j)]
+            cell.set_facecolor("#1B2238")
+            cell.set_text_props(color="white", fontweight="bold", fontsize=7)
+
+        # 행 레이블 스타일
+        for i in range(n_nurses):
+            cell = tbl[(i + 1, -1)]
+            cell.set_facecolor("#26314F")
+            cell.set_text_props(color="white", fontweight="bold", fontsize=8)
+
+        ax.set_title(
+            f"{schedule.year}년 {schedule.month}월 근무표",
+            pad=12, fontsize=13, fontweight="bold", color="#1B2238",
+        )
+        plt.tight_layout(pad=0.3)
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        plt.close(fig)
+        return buf.getvalue()
+
     def to_json(self, schedule: Schedule) -> str:
         return schedule.model_dump_json(indent=2)
 
